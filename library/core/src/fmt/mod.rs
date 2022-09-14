@@ -1351,7 +1351,8 @@ impl<'a> Formatter<'a> {
     /// assert_eq!(&format!("{:0>#8}", Foo::new(-1)), "00-Foo 1");
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn pad_integral(&mut self, is_nonnegative: bool, prefix: &str, buf: &str) -> Result {
+    #[rustc_const_unstable(feature = "const_num_display", issue = "none")]
+    pub const fn pad_integral(&mut self, is_nonnegative: bool, prefix: &str, buf: &str) -> Result {
         let mut width = buf.len();
 
         let mut sign = None;
@@ -1372,11 +1373,22 @@ impl<'a> Formatter<'a> {
 
         // Writes the sign if it exists, and then the prefix if it was requested
         #[inline(never)]
-        fn write_prefix(f: &mut Formatter<'_>, sign: Option<char>, prefix: Option<&str>) -> Result {
+        const fn write_prefix(
+            f: &mut Formatter<'_>,
+            sign: Option<char>,
+            prefix: Option<&str>,
+        ) -> Result {
             if let Some(c) = sign {
-                f.buf.write_char(c)?;
+                // FIXME f.buf.write_char(c)?;
+                if let Err(err) = f.buf.write_char(c) {
+                    return Err(err);
+                }
             }
-            if let Some(prefix) = prefix { f.buf.write_str(prefix) } else { Ok(()) }
+            if let Some(prefix) = prefix {
+                f.buf.write_str(prefix)
+            } else {
+                Ok(())
+            }
         }
 
         // The `width` field is more of a `min-width` parameter at this point.
@@ -1832,7 +1844,8 @@ impl<'a> Formatter<'a> {
     /// ```
     #[must_use]
     #[stable(feature = "fmt_flags", since = "1.5.0")]
-    pub fn sign_plus(&self) -> bool {
+    #[rustc_const_unstable(feature = "const_num_display", issue = "none")]
+    pub const fn sign_plus(&self) -> bool {
         self.flags & (1 << FlagV1::SignPlus as u32) != 0
     }
 
@@ -1861,7 +1874,8 @@ impl<'a> Formatter<'a> {
     /// ```
     #[must_use]
     #[stable(feature = "fmt_flags", since = "1.5.0")]
-    pub fn sign_minus(&self) -> bool {
+    #[rustc_const_unstable(feature = "const_num_display", issue = "none")]
+    pub const fn sign_minus(&self) -> bool {
         self.flags & (1 << FlagV1::SignMinus as u32) != 0
     }
 
