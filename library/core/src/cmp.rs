@@ -280,7 +280,8 @@ pub macro PartialEq($item:item) {
 #[doc(alias = "!=")]
 #[stable(feature = "rust1", since = "1.0.0")]
 #[rustc_diagnostic_item = "Eq"]
-pub trait Eq: PartialEq<Self> {
+#[const_trait]
+pub trait Eq: ~const PartialEq<Self> {
     // this method is used solely by #[deriving] to assert
     // that every component of a type implements #[deriving]
     // itself, the current deriving infrastructure means doing this
@@ -761,7 +762,7 @@ impl<T: Clone> Clone for Reverse<T> {
 #[stable(feature = "rust1", since = "1.0.0")]
 #[rustc_diagnostic_item = "Ord"]
 #[const_trait]
-pub trait Ord: Eq + PartialOrd<Self> {
+pub trait Ord: ~const Eq + ~const PartialOrd<Self> {
     /// This method returns an [`Ordering`] between `self` and `other`.
     ///
     /// By convention, `self.cmp(&other)` returns the ordering matching the expression
@@ -1204,7 +1205,6 @@ pub const fn min<T: ~const Ord + ~const Destruct>(v1: T, v2: T) -> T {
 pub const fn min_by<T, F: ~const FnOnce(&T, &T) -> Ordering>(v1: T, v2: T, compare: F) -> T
 where
     T: ~const Destruct,
-    F: ~const Destruct,
 {
     match compare(&v1, &v2) {
         Ordering::Less | Ordering::Equal => v1,
@@ -1289,7 +1289,6 @@ pub const fn max<T: ~const Ord + ~const Destruct>(v1: T, v2: T) -> T {
 pub const fn max_by<T, F: ~const FnOnce(&T, &T) -> Ordering>(v1: T, v2: T, compare: F) -> T
 where
     T: ~const Destruct,
-    F: ~const Destruct,
 {
     match compare(&v1, &v2) {
         Ordering::Less | Ordering::Equal => v2,
@@ -1370,7 +1369,8 @@ mod impls {
     macro_rules! eq_impl {
         ($($t:ty)*) => ($(
             #[stable(feature = "rust1", since = "1.0.0")]
-            impl Eq for $t {}
+            #[rustc_const_unstable(feature = "const_cmp", issue = "92391")]
+            impl const Eq for $t {}
         )*)
     }
 
@@ -1494,7 +1494,8 @@ mod impls {
     }
 
     #[unstable(feature = "never_type", issue = "35121")]
-    impl Eq for ! {}
+    #[rustc_const_unstable(feature = "const_cmp", issue = "92391")]
+    impl const Eq for ! {}
 
     #[unstable(feature = "never_type", issue = "35121")]
     #[rustc_const_unstable(feature = "const_cmp", issue = "92391")]
