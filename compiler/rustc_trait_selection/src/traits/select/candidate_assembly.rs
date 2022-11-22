@@ -122,8 +122,11 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 self.assemble_candidates_from_object_ty(obligation, &mut candidates);
             }
 
+            self.assemble_candidates_from_unified_impls(obligation, &mut candidates);
+
             self.assemble_candidates_from_projected_tys(obligation, &mut candidates);
             self.assemble_candidates_from_caller_bounds(stack, &mut candidates)?;
+
             // Auto implementations have lower priority, so we only
             // consider triggering a default if there is no other impl that can apply.
             if candidates.vec.is_empty() {
@@ -470,6 +473,53 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             }
         }
         false
+    }
+    /// When constructing an impl over a generic const enum (i.e. bool = { true, false })
+    /// If all possible variants of an enum are implemented AND the obligation is over that
+    /// variant,
+    fn assemble_candidates_from_unified_impls(
+        &mut self,
+        obligation: &PolyTraitObligation<'tcx>,
+        candidates: &mut SelectionCandidateSet<'tcx>,
+    ) {
+        if !self.tcx().features().impl_unified_exhaustive_const_traits {
+            return;
+        }
+
+        // see note in `assemble_candidates_from_impls`.
+        if obligation.predicate.references_error() {
+            return;
+        }
+
+        // note: ow = otherwise
+        // - check if trait has abstract const argument(s) which is (are) enum or bool, ow return
+        // - check if trait enum is non-exhaustive, ow return
+        // - construct required set of possible combinations, with false unless present
+        // for each relevant trait
+        // - check if is same trait
+        // - set combo as present
+        // If all required sets are present, add candidate impl generic over all combinations.
+
+        let Some(query) = obligation.predicate.skip_binder().trait_ref.substs.get(0) else {
+            return;
+        };
+        let query = query.expect_ty();
+        let ty::Adt(_adt_def, adt_substs) = query.kind() else {
+            return;
+        };
+
+        if adt_substs
+            .consts()
+            .filter(|ct| matches!(ct.kind(), ty::ConstKind::Unevaluated(..)))
+            // FIXME(julianknodt): should apply to generic enums and not just bools
+            .filter(|ct| ct.ty().is_bool())
+            .next()
+            .is_none()
+        {
+            return;
+        };
+
+        candidates.vec.push(LazyCandidate(obligation.predicate));
     }
 
     fn assemble_candidates_from_auto_impls(

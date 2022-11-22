@@ -18,6 +18,7 @@ impl<'tcx, N: fmt::Debug> fmt::Debug for traits::ImplSource<'tcx, N> {
             }
 
             super::ImplSource::TraitUpcasting(ref d) => write!(f, "{:?}", d),
+            super::ImplSource::Lazy(ref n) => write!(f, "Lazy({:?})", n),
         }
     }
 }

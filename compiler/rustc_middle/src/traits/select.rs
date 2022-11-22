@@ -167,6 +167,10 @@ pub enum SelectionCandidate<'tcx> {
 
     /// Implementation of `const Destruct`, optionally from a custom `impl const Drop`.
     ConstDestructCandidate(Option<DefId>),
+
+    /// Candidate which is generated for a abstract const, unifying other impls.
+    /// Will never actually be used, by construction.
+    LazyCandidate(ty::PolyTraitPredicate<'tcx>),
 }
 
 /// The result of trait evaluation. The order is important

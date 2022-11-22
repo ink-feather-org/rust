@@ -659,6 +659,9 @@ pub enum ImplSource<'tcx, N> {
 
     /// ImplSource for trait upcasting coercion
     TraitUpcasting(ImplSourceTraitUpcastingData<N>),
+
+    /// Impl Source for an Abstract Const unification.
+    Lazy(Vec<N>),
 }
 
 impl<'tcx, N> ImplSource<'tcx, N> {
@@ -668,6 +671,7 @@ impl<'tcx, N> ImplSource<'tcx, N> {
             ImplSource::Param(n, _) | ImplSource::Builtin(n) => n,
             ImplSource::Object(d) => d.nested,
             ImplSource::TraitUpcasting(d) => d.nested,
+            ImplSource::Lazy(n) => n,
         }
     }
 
@@ -677,6 +681,7 @@ impl<'tcx, N> ImplSource<'tcx, N> {
             ImplSource::Param(n, _) | ImplSource::Builtin(n) => &n,
             ImplSource::Object(d) => &d.nested,
             ImplSource::TraitUpcasting(d) => &d.nested,
+            ImplSource::Lazy(n) => &n,
         }
     }
 
@@ -686,6 +691,7 @@ impl<'tcx, N> ImplSource<'tcx, N> {
             ImplSource::Param(n, _) | ImplSource::Builtin(n) => n,
             ImplSource::Object(d) => &mut d.nested,
             ImplSource::TraitUpcasting(d) => &mut d.nested,
+            ImplSource::Lazy(ref mut n) => n,
         }
     }
 
@@ -711,6 +717,7 @@ impl<'tcx, N> ImplSource<'tcx, N> {
                     nested: d.nested.into_iter().map(f).collect(),
                 })
             }
+            ImplSource::Lazy(n) => ImplSource::Lazy(n.into_iter().map(f).collect()),
         }
     }
 }

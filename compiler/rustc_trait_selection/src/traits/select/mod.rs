@@ -1850,6 +1850,8 @@ impl<'tcx> SelectionContext<'_, 'tcx> {
         // This is a fix for #53123 and prevents winnowing from accidentally extending the
         // lifetime of a variable.
         match (&other.candidate, &victim.candidate) {
+            (_, LazyCandidate(..)) => DropVictim::Yes,
+            (LazyCandidate(..), _) => DropVictim::No,
             (_, AutoImplCandidate) | (AutoImplCandidate, _) => {
                 bug!(
                     "default implementations shouldn't be recorded \

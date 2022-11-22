@@ -14,7 +14,7 @@ use rustc_infer::infer::{DefineOpaqueTypes, InferOk};
 use rustc_middle::traits::SelectionOutputTypeParameterMismatch;
 use rustc_middle::ty::{
     self, Binder, GenericParamDefKind, InternalSubsts, SubstsRef, ToPolyTraitRef, ToPredicate,
-    TraitPredicate, TraitRef, Ty, TyCtxt, TypeVisitableExt,
+    TraitPredicate, TraitRef, Ty, TyCtxt, TypeFoldable, TypeFolder, TypeVisitableExt,
 };
 use rustc_span::def_id::DefId;
 
@@ -126,6 +126,10 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
             ConstDestructCandidate(def_id) => {
                 let data = self.confirm_const_destruct_candidate(obligation, def_id)?;
                 ImplSource::Builtin(data)
+            }
+            LazyCandidate(candidate) => {
+                let obligations = self.confirm_lazy_candidate(obligation, candidate);
+                ImplSource::Lazy(obligations)
             }
         };
 
@@ -1365,5 +1369,74 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         }
 
         Ok(nested)
+    }
+
+    /// Generates obligations for a lazy candidate
+    /// Where the obligations generated are all possible values for the type of a
+    /// `ConstKind::Unevaluated(..)`.
+    /// In the future, it would be nice to extend this to inductive proofs.
+    #[allow(unused_variables, unused_mut, dead_code)]
+    fn confirm_lazy_candidate(
+        &mut self,
+        obligation: &PolyTraitObligation<'tcx>,
+        candidate: ty::PolyTraitPredicate<'tcx>,
+    ) -> Vec<PredicateObligation<'tcx>> {
+        let mut obligations = vec![];
+
+        let query = obligation.predicate.skip_binder().trait_ref.self_ty();
+        let ty::Adt(_adt_def, adt_substs) = query.kind() else {
+            return obligations;
+        };
+        // Find one adt subst at a time, then will be handled recursively.
+        let const_to_replace = adt_substs
+            .consts()
+            .find(|ct| ct.ty().is_bool() && matches!(ct.kind(), ty::ConstKind::Unevaluated(..)))
+            .unwrap();
+
+        /// Folder for replacing specific const values in `substs`.
+        struct Folder<'tcx> {
+            tcx: TyCtxt<'tcx>,
+            replace: ty::Const<'tcx>,
+            with: ty::Const<'tcx>,
+        }
+
+        impl<'tcx> TypeFolder<TyCtxt<'tcx>> for Folder<'tcx> {
+            fn interner(&self) -> TyCtxt<'tcx> {
+                self.tcx
+            }
+            fn fold_const(&mut self, c: ty::Const<'tcx>) -> ty::Const<'tcx> {
+                if c == self.replace { self.with } else { c }
+            }
+        }
+
+        let tcx = self.tcx();
+        for v in [true, false] {
+            let predicate = candidate.map_bound(|pt_ref| {
+                let query = pt_ref.self_ty();
+                let mut folder = Folder {
+                    tcx,
+                    replace: const_to_replace,
+                    with: ty::Const::from_bool(self.tcx(), v).into(),
+                };
+                let mut new_poly_trait_ref = pt_ref.clone();
+                new_poly_trait_ref.trait_ref = TraitRef::new(
+                    tcx,
+                    pt_ref.trait_ref.def_id,
+                    [query.fold_with(&mut folder).into()]
+                        .into_iter()
+                        .chain(pt_ref.trait_ref.substs.iter().skip(1)),
+                );
+                new_poly_trait_ref
+            });
+
+            let ob = Obligation::new(
+                self.tcx(),
+                obligation.cause.clone(),
+                obligation.param_env,
+                predicate,
+            );
+            obligations.push(ob);
+        }
+        obligations
     }
 }

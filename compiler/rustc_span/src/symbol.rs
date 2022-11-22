@@ -818,6 +818,7 @@ symbols! {
         impl_trait_in_bindings,
         impl_trait_in_fn_trait_return,
         impl_trait_projections,
+        impl_unified_exhaustive_const_traits,
         implement_via_object,
         implied_by,
         import,

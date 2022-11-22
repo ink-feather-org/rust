@@ -432,6 +432,8 @@ declare_features! (
     (active, impl_trait_in_fn_trait_return, "1.64.0", Some(99697), None),
     /// Allows referencing `Self` and projections in impl-trait.
     (active, impl_trait_projections, "1.67.0", Some(103532), None),
+    /// Allow multiple const-generic impls to unify for traits which are abstract.
+    (active, impl_unified_exhaustive_const_traits, "1.65.0", Some(104806), None),
     /// Allows using imported `main` function
     (active, imported_main, "1.53.0", Some(28937), None),
     /// Allows associated types in inherent impls.

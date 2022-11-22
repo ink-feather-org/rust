@@ -1921,7 +1921,8 @@ fn assemble_candidates_from_impls<'cx, 'tcx>(
                 // why we special case object types.
                 false
             }
-            | super::ImplSource::TraitUpcasting(_) => {
+            super::ImplSource::Lazy(..) => false,
+            super::ImplSource::TraitUpcasting(_) => {
                 // These traits have no associated types.
                 selcx.tcx().sess.delay_span_bug(
                     obligation.cause.span,
@@ -2001,6 +2002,7 @@ fn confirm_select_candidate<'cx, 'tcx>(
         }
         super::ImplSource::Object(_)
         | super::ImplSource::Param(..)
+        | super::ImplSource::Lazy(..)
         | super::ImplSource::TraitUpcasting(_) => {
             // we don't create Select candidates with this kind of resolution
             span_bug!(
