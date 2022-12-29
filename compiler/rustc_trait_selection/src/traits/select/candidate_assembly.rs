@@ -118,11 +118,10 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
                 self.assemble_closure_candidates(obligation, &mut candidates);
                 self.assemble_fn_pointer_candidates(obligation, &mut candidates);
+                self.assemble_candidates_from_unified_impls(obligation, &mut candidates);
                 self.assemble_candidates_from_impls(obligation, &mut candidates);
                 self.assemble_candidates_from_object_ty(obligation, &mut candidates);
             }
-
-            self.assemble_candidates_from_unified_impls(obligation, &mut candidates);
 
             self.assemble_candidates_from_projected_tys(obligation, &mut candidates);
             self.assemble_candidates_from_caller_bounds(stack, &mut candidates)?;
@@ -511,8 +510,6 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         if adt_substs
             .consts()
             .filter(|ct| matches!(ct.kind(), ty::ConstKind::Unevaluated(..)))
-            // FIXME(julianknodt): should apply to generic enums and not just bools
-            .filter(|ct| ct.ty().is_bool())
             .next()
             .is_none()
         {

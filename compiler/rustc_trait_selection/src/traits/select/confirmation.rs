@@ -11,10 +11,11 @@ use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_hir::lang_items::LangItem;
 use rustc_infer::infer::LateBoundRegionConversionTime::HigherRankedType;
 use rustc_infer::infer::{DefineOpaqueTypes, InferOk};
+use rustc_middle::mir::BinOp;
 use rustc_middle::traits::SelectionOutputTypeParameterMismatch;
 use rustc_middle::ty::{
-    self, Binder, GenericParamDefKind, InternalSubsts, SubstsRef, ToPolyTraitRef, ToPredicate,
-    TraitPredicate, TraitRef, Ty, TyCtxt, TypeFoldable, TypeFolder, TypeVisitableExt,
+    self, Binder, Const, GenericParamDefKind, InternalSubsts, SubstsRef, ToPolyTraitRef,
+    ToPredicate, TraitPredicate, TraitRef, Ty, TyCtxt, TypeFoldable, TypeFolder, TypeVisitableExt,
 };
 use rustc_span::def_id::DefId;
 
@@ -1382,6 +1383,11 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         candidate: ty::PolyTraitPredicate<'tcx>,
     ) -> Vec<PredicateObligation<'tcx>> {
         let mut obligations = vec![];
+        let tcx = self.tcx();
+
+        if check_inductive(tcx, obligation, candidate, &mut obligations) {
+            return obligations;
+        }
 
         let query = obligation.predicate.skip_binder().trait_ref.self_ty();
         let ty::Adt(_adt_def, adt_substs) = query.kind() else {
@@ -1390,26 +1396,13 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         // Find one adt subst at a time, then will be handled recursively.
         let const_to_replace = adt_substs
             .consts()
-            .find(|ct| ct.ty().is_bool() && matches!(ct.kind(), ty::ConstKind::Unevaluated(..)))
+            .find(|ct| matches!(ct.kind(), ty::ConstKind::Unevaluated(..)))
             .unwrap();
+        let Ok(iter) = exhaustive_types(tcx, const_to_replace.ty()) else {
+            // todo should be an error
+            return vec![];
+        };
 
-        /// Folder for replacing specific const values in `substs`.
-        struct Folder<'tcx> {
-            tcx: TyCtxt<'tcx>,
-            replace: ty::Const<'tcx>,
-            with: ty::Const<'tcx>,
-        }
-
-        impl<'tcx> TypeFolder<TyCtxt<'tcx>> for Folder<'tcx> {
-            fn interner(&self) -> TyCtxt<'tcx> {
-                self.tcx
-            }
-            fn fold_const(&mut self, c: ty::Const<'tcx>) -> ty::Const<'tcx> {
-                if c == self.replace { self.with } else { c }
-            }
-        }
-
-        let tcx = self.tcx();
         for v in [true, false] {
             let predicate = candidate.map_bound(|pt_ref| {
                 let query = pt_ref.self_ty();
@@ -1439,4 +1432,103 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         }
         obligations
     }
+}
+
+/// Folder for replacing specific const values in `substs`.
+struct Folder<'tcx> {
+    tcx: TyCtxt<'tcx>,
+    replace: ty::Const<'tcx>,
+    with: ty::Const<'tcx>,
+}
+
+impl<'tcx> TypeFolder<TyCtxt<'tcx>> for Folder<'tcx> {
+    fn interner(&self) -> TyCtxt<'tcx> {
+        self.tcx
+    }
+    fn fold_const(&mut self, c: ty::Const<'tcx>) -> ty::Const<'tcx> {
+        if c == self.replace { self.with } else { c }
+    }
+}
+
+fn check_inductive<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    obligation: &PolyTraitObligation<'tcx>,
+    candidate: ty::PolyTraitPredicate<'tcx>,
+    new_obligations: &mut Vec<PredicateObligation<'tcx>>,
+) -> bool {
+    let query = obligation.predicate.skip_binder().trait_ref.self_ty();
+    let ty::Adt(_adt_def, adt_substs) = query.kind() else { return false };
+    // Find one adt subst at a time, then will be handled recursively.
+    let (mut const_to_replace, ct) = adt_substs
+        .consts()
+        .find_map(|ct| {
+            if let ty::ConstKind::Unevaluated(uv) = ct.kind() { Some((uv, ct)) } else { None }
+        })
+        .unwrap();
+
+    const_to_replace.substs = InternalSubsts::identity_for_item(tcx, const_to_replace.def);
+    let generic_const =
+        tcx.expand_abstract_consts(Const::new_unevaluated(tcx, const_to_replace, ct.ty()));
+    // remove any substs used in the obligation (why is this necessary?)
+
+    let ty::ConstKind::Expr(e) = generic_const.kind() else {
+        return false;
+    };
+    match e {
+      ty::Expr::Binop(BinOp::Sub, l, r) if let ty::ConstKind::Param(_p) = l.kind() &&
+        Some(1) == r.try_eval_bits(tcx, obligation.param_env, r.ty())=> {
+          let predicate = candidate.map_bound(|pt_ref| {
+              let query = pt_ref.self_ty();
+              let mut folder = Folder { tcx,
+                replace: ct,
+                with: ty::Const::from_bits(tcx, 0, ty::ParamEnv::empty().and(ct.ty())),
+              };
+              let mut new_poly_trait_ref = pt_ref.clone();
+              new_poly_trait_ref.trait_ref = TraitRef::new(tcx,pt_ref.trait_ref.def_id,
+                [query.fold_with(&mut folder).into()]
+                    .into_iter()
+                    .chain(pt_ref.trait_ref.substs.iter().skip(1)), );
+              new_poly_trait_ref
+          });
+
+          let ob = Obligation::new(
+              tcx,
+              obligation.cause.clone(),
+              obligation.param_env,
+              predicate,
+          );
+
+          new_obligations.push(ob);
+          true
+      }
+      _ => false,
+    }
+}
+
+fn exhaustive_types<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Result<impl Iterator<Item = ty::Const<'tcx>>, ()> {
+    use std::mem::transmute;
+    let ty_kind = ty.kind();
+    let vals: Box<dyn Iterator<Item = ty::Const<'tcx>>> = match ty_kind {
+        ty::Bool => Box::new([true, false].into_iter().map(move |v| ty::Const::from_bool(tcx, v))),
+        ty::Int(ty::IntTy::I8) => Box::new((i8::MIN..=i8::MAX).map(move |v| {
+            ty::Const::from_bits(
+                tcx,
+                unsafe { transmute(v as i128) },
+                ty::ParamEnv::empty().and(ty),
+            )
+        })),
+        ty::Uint(ty::UintTy::U8) => Box::new((u8::MIN..=u8::MAX).map(move |v| {
+            ty::Const::from_bits(
+                tcx,
+                unsafe { transmute(v as u128) },
+                ty::ParamEnv::empty().and(ty),
+            )
+        })),
+
+        _ => return Err(()),
+    };
+    Ok(vals)
 }
