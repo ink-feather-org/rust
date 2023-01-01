@@ -181,7 +181,7 @@ where
 macro_rules! zip_impl_general_defaults {
     () => {
         #[inline]
-        #[cfg_attr(not(bootstrap), rustc_allow_const_fn_unstable(const_try, const_for))]
+        //#[cfg_attr(not(bootstrap), rustc_allow_const_fn_unstable(const_try, const_for))]
         default fn next(&mut self) -> Option<(A::Item, B::Item)> {
             // FIXME(const_trait_impl): revert to `?` when we can
             let Some(x) = self.a.next() else { return None };
