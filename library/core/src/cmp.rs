@@ -763,7 +763,7 @@ impl<T: Clone> Clone for Reverse<T> {
 #[stable(feature = "rust1", since = "1.0.0")]
 #[rustc_diagnostic_item = "Ord"]
 #[const_trait]
-pub trait Ord: Eq + PartialOrd<Self> {
+pub trait Ord: Eq + ~const PartialOrd<Self> {
     /// This method returns an [`Ordering`] between `self` and `other`.
     ///
     /// By convention, `self.cmp(&other)` returns the ordering matching the expression

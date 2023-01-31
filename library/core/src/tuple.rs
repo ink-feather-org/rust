@@ -82,7 +82,7 @@ macro_rules! tuple_impls {
             $($T)+ @
             #[stable(feature = "rust1", since = "1.0.0")]
             #[rustc_const_unstable(feature = "const_cmp", issue = "92391")]
-            impl<$($T: ~const Ord),+> const Ord for ($($T,)+)
+            impl<$($T: ~const Ord + ~const PartialEq),+> const Ord for ($($T,)+)
             where
                 last_type!($($T,)+): ?Sized
             {

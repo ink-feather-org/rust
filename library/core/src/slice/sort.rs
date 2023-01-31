@@ -10,6 +10,8 @@
 //! TimSort.
 
 use crate::cmp;
+use crate::intrinsics::const_eval_select;
+use crate::marker::Destruct;
 use crate::mem::{self, MaybeUninit, SizedTypeProperties};
 use crate::ptr;
 
@@ -19,7 +21,7 @@ struct InsertionHole<T> {
     dest: *mut T,
 }
 
-impl<T> Drop for InsertionHole<T> {
+impl<T> const Drop for InsertionHole<T> {
     fn drop(&mut self) {
         // SAFETY: This is a helper class. Please refer to its usage for correctness. Namely, one
         // must be sure that `src` and `dst` does not overlap as required by
@@ -32,9 +34,10 @@ impl<T> Drop for InsertionHole<T> {
 
 /// Inserts `v[v.len() - 1]` into pre-sorted sequence `v[..v.len() - 1]` so that whole `v[..]`
 /// becomes sorted.
-unsafe fn insert_tail<T, F>(v: &mut [T], is_less: &mut F)
+#[rustc_allow_const_fn_unstable(const_for)]
+const unsafe fn insert_tail<T, F>(v: &mut [T], is_less: &mut F)
 where
-    F: FnMut(&T, &T) -> bool,
+    F: ~const FnMut(&T, &T) -> bool,
 {
     debug_assert!(v.len() >= 2);
 
@@ -67,8 +70,11 @@ where
             let mut hole = InsertionHole { src: &*tmp, dest: i_ptr.sub(1) };
             ptr::copy_nonoverlapping(hole.dest, i_ptr, 1);
 
+            // FIXME(const_trait_impl) revert to for loop
             // SAFETY: We know i is at least 1.
-            for j in (0..(i - 1)).rev() {
+            let mut j = i;
+            while j != 0 {
+                j -= 1;
                 let j_ptr = arr_ptr.add(j);
                 if !is_less(&*tmp, &*j_ptr) {
                     break;
@@ -85,9 +91,10 @@ where
 /// Inserts `v[0]` into pre-sorted sequence `v[1..]` so that whole `v[..]` becomes sorted.
 ///
 /// This is the integral subroutine of insertion sort.
-unsafe fn insert_head<T, F>(v: &mut [T], is_less: &mut F)
+#[rustc_allow_const_fn_unstable(const_for)]
+const unsafe fn insert_head<T, F>(v: &mut [T], is_less: &mut F)
 where
-    F: FnMut(&T, &T) -> bool,
+    F: ~const FnMut(&T, &T) -> bool,
 {
     debug_assert!(v.len() >= 2);
 
@@ -145,9 +152,10 @@ where
 /// Never inline this function to avoid code bloat. It still optimizes nicely and has practically no
 /// performance impact. Even improving performance in some cases.
 #[inline(never)]
-fn insertion_sort_shift_left<T, F>(v: &mut [T], offset: usize, is_less: &mut F)
+#[rustc_allow_const_fn_unstable(const_for)]
+const fn insertion_sort_shift_left<T, F>(v: &mut [T], offset: usize, is_less: &mut F)
 where
-    F: FnMut(&T, &T) -> bool,
+    F: ~const FnMut(&T, &T) -> bool,
 {
     let len = v.len();
 
@@ -170,9 +178,10 @@ where
 /// Never inline this function to avoid code bloat. It still optimizes nicely and has practically no
 /// performance impact. Even improving performance in some cases.
 #[inline(never)]
-fn insertion_sort_shift_right<T, F>(v: &mut [T], offset: usize, is_less: &mut F)
+#[rustc_allow_const_fn_unstable(const_for)]
+const fn insertion_sort_shift_right<T, F>(v: &mut [T], offset: usize, is_less: &mut F)
 where
-    F: FnMut(&T, &T) -> bool,
+    F: ~const FnMut(&T, &T) -> bool,
 {
     let len = v.len();
 
@@ -180,7 +189,10 @@ where
     assert!(offset != 0 && offset <= len && len >= 2);
 
     // Shift each element of the unsorted region v[..i] as far left as is needed to make v sorted.
-    for i in (0..offset).rev() {
+    // FIXME(const_trait_impl) for i in (0..offset).rev()
+    let mut i = offset;
+    while i != 0 {
+        i -= 1;
         // SAFETY: we tested that `offset` must be at least 1, so this loop is only entered if len
         // >= 2.We ensured that the slice length is always at least 2 long. We know that start_found
         // will be at least one less than end, and the range is exclusive. Which gives us i always
@@ -195,9 +207,10 @@ where
 ///
 /// Returns `true` if the slice is sorted at the end. This function is *O*(*n*) worst-case.
 #[cold]
-fn partial_insertion_sort<T, F>(v: &mut [T], is_less: &mut F) -> bool
+#[rustc_allow_const_fn_unstable(const_for)]
+const fn partial_insertion_sort<T, F>(v: &mut [T], is_less: &mut F) -> bool
 where
-    F: FnMut(&T, &T) -> bool,
+    F: ~const FnMut(&T, &T) -> bool,
 {
     // Maximum number of adjacent out-of-order pairs that will get shifted.
     const MAX_STEPS: usize = 5;
@@ -246,12 +259,13 @@ where
 /// Sorts `v` using heapsort, which guarantees *O*(*n* \* log(*n*)) worst-case.
 #[cold]
 #[unstable(feature = "sort_internals", reason = "internal to sort module", issue = "none")]
-pub fn heapsort<T, F>(v: &mut [T], mut is_less: F)
+#[rustc_const_unstable(feature = "const_sort", issue = "102307")]
+pub const fn heapsort<T, F>(v: &mut [T], mut is_less: F)
 where
-    F: FnMut(&T, &T) -> bool,
+    F: ~const FnMut(&T, &T) -> bool + ~const Destruct,
 {
     // This binary heap respects the invariant `parent >= child`.
-    let mut sift_down = |v: &mut [T], mut node| {
+    let mut sift_down = const |v: &mut [T], mut node| {
         loop {
             // Children of `node`.
             let mut child = 2 * node + 1;
@@ -279,12 +293,18 @@ where
     };
 
     // Build the heap in linear time.
-    for i in (0..v.len() / 2).rev() {
+    //FIXME(const_trait_impl): revert to: for i in (0..v.len() / 2).rev() {
+    let mut i = v.len() / 2;
+    while i > 0 {
+        i -= 1;
         sift_down(v, i);
     }
 
     // Pop maximal elements from the heap.
-    for i in (1..v.len()).rev() {
+    //FIXME(const_trait_impl): revert to: for i in (1..v.len()).rev() {
+    let mut i = v.len();
+    while i > 1 {
+        i -= 1;
         v.swap(0, i);
         sift_down(&mut v[..i], 0);
     }
@@ -299,9 +319,10 @@ where
 /// This idea is presented in the [BlockQuicksort][pdf] paper.
 ///
 /// [pdf]: https://drops.dagstuhl.de/opus/volltexte/2016/6389/pdf/LIPIcs-ESA-2016-38.pdf
-fn partition_in_blocks<T, F>(v: &mut [T], pivot: &T, is_less: &mut F) -> usize
+#[rustc_allow_const_fn_unstable(const_for)]
+const fn partition_in_blocks<T, F>(v: &mut [T], pivot: &T, is_less: &mut F) -> usize
 where
-    F: FnMut(&T, &T) -> bool,
+    F: ~const FnMut(&T, &T) -> bool,
 {
     // Number of elements in a typical block.
     const BLOCK: usize = 128;
@@ -338,30 +359,91 @@ where
     // than two fixed-size arrays of length `BLOCK`. VLAs might be more cache-efficient.
 
     // Returns the number of elements between pointers `l` (inclusive) and `r` (exclusive).
-    fn width<T>(l: *mut T, r: *mut T) -> usize {
+    // SAFETY:  This is a helper function wrapping `offset_from`.
+    //          Please refer to `offset_from` for correct usage.
+    //          Mainly lhs and rhs being in the same allocated Object
+    //            and a multiple of their size apart.
+    const unsafe fn width<T>(l: *mut T, r: *mut T) -> usize {
         assert!(mem::size_of::<T>() > 0);
-        // FIXME: this should *likely* use `offset_from`, but more
-        // investigation is needed (including running tests in miri).
-        (r.addr() - l.addr()) / mem::size_of::<T>()
+        // FIXME: Verify the safety of using `offset_from`, (including running tests in miri).
+
+        // SAFETY: Guaranteed by caller
+        unsafe { r.offset_from(l) as usize }
+    }
+    // SAFETY:  This is a helper function wrapping `offset_from` with null pointer checks.
+    //          If (at least) one of the pointers is null the output is defined.
+    //          Otherwise refer to `offset_from` for correct usage.
+    const unsafe fn lt<T>(lhs: *const T, rhs: *const T) -> bool {
+        const fn ct<T>(lhs: *const T, rhs: *const T) -> bool {
+            if lhs.is_null() || rhs.is_null() {
+                return false;
+            }
+            // SAFETY: Guaranteed by caller (after nullptr checks)
+            unsafe { lhs.offset_from(rhs) }.lt(&0)
+        }
+        fn rt<T>(lhs: *const T, rhs: *const T) -> bool {
+            lhs < rhs
+        }
+        // SAFETY: With caller guaranties there can never be any observable difference.
+        unsafe { const_eval_select((lhs, rhs), ct, rt) }
+    }
+    // SAFETY:  This is a helper function wrapping `offset_from` with null pointer checks.
+    //          If (at least) one of the pointers is null the output is defined.
+    //          Otherwise refer to `offset_from` for correct usage.
+    const unsafe fn eq<T>(lhs: *const T, rhs: *const T) -> bool {
+        const fn ct<T>(lhs: *const T, rhs: *const T) -> bool {
+            if lhs.is_null() {
+                return rhs.is_null();
+            }
+            if rhs.is_null() {
+                return false;
+            }
+            // SAFETY: Guaranteed by caller (after nullptr checks)
+            unsafe { lhs.offset_from(rhs) }.eq(&0)
+        }
+        fn rt<T>(lhs: *const T, rhs: *const T) -> bool {
+            lhs == rhs
+        }
+        // SAFETY: With caller guaranties there can never be any observable difference.
+        unsafe { const_eval_select((lhs, rhs), ct, rt) }
     }
 
     loop {
         // We are done with partitioning block-by-block when `l` and `r` get very close. Then we do
         // some patch-up work in order to partition the remaining elements in between.
-        let is_done = width(l, r) <= 2 * BLOCK;
+        // SAFETY:
+        //  `l` and `r` start at the beginning and immediately after end of the same allocated object,
+        //     `l` is only ever incremented and `r` only ever decremented.
+        //     and the following check makes sure that `l` is always smaller than r
+        //        since it makes sure that the space between them is always bigger than 2 * BLOCK at the beginning of the iteration (otherwise breaks at the end of the iteration) and
+        //        every iteration the difference can only shrink by exactly that amount.
+        //        So `l` is always smaller than `r` here.
+        //     So `l` and `r` are always in same allocated object.
+        // `r` originates from l.
+        // `l` and `r` are only ever changed with add/sub, so they will always stay aligned (compared to each other).
+        // The length of the slice in bytes can never be bigger than isize::max, so `offset_from` won't ever overflow (or wrap around the address space).
+        let initial_rem = unsafe { width(l, r) };
+        let is_done = initial_rem <= 2 * BLOCK;
 
         if is_done {
             // Number of remaining elements (still not compared to the pivot).
-            let mut rem = width(l, r);
-            if start_l < end_l || start_r < end_r {
+            let mut rem = initial_rem;
+            // SAFETY:
+            // `start_l` and `end_l` are always either null pointers or point into `offsets_l` correctly aligned.
+            // `start_r` and `end_r` are always either null pointers or point into `offsets_r` correctly aligned.
+            if unsafe { lt(start_l, end_l) || lt(start_r, end_r) } {
                 rem -= BLOCK;
             }
 
             // Adjust block sizes so that the left and right block don't overlap, but get perfectly
             // aligned to cover the whole remaining gap.
-            if start_l < end_l {
+            // SAFETY:
+            // `start_l` and `end_l` are always either null pointers or point into `offsets_l` correctly aligned.
+            if unsafe { lt(start_l, end_l) } {
                 block_r = rem;
-            } else if start_r < end_r {
+                // SAFETY:
+                // `start_r` and `end_r` are always either null pointers or point into `offsets_r` correctly aligned.
+            } else if unsafe { lt(start_r, end_r) } {
                 block_l = rem;
             } else {
                 // There were the same number of elements to switch on both blocks during the last
@@ -371,10 +453,12 @@ where
                 block_r = rem - block_l;
             }
             debug_assert!(block_l <= BLOCK && block_r <= BLOCK);
-            debug_assert!(width(l, r) == block_l + block_r);
+            debug_assert!(initial_rem == block_l + block_r);
         }
 
-        if start_l == end_l {
+        // SAFETY:
+        // `start_l` and `end_l` are always either null pointers or point into `offsets_l` correctly aligned.
+        if unsafe { eq(start_l, end_l) } {
             // Trace `block_l` elements from the left side.
             start_l = MaybeUninit::slice_as_mut_ptr(&mut offsets_l);
             end_l = start_l;
@@ -399,8 +483,9 @@ where
                 }
             }
         }
-
-        if start_r == end_r {
+        // SAFETY:
+        // `start_r` and `end_r` are always either null pointers or point into `offsets_r` correctly aligned.
+        if unsafe { eq(start_r, end_r) } {
             // Trace `block_r` elements from the right side.
             start_r = MaybeUninit::slice_as_mut_ptr(&mut offsets_r);
             end_r = start_r;
@@ -428,7 +513,11 @@ where
         }
 
         // Number of out-of-order elements to swap between the left and right side.
-        let count = cmp::min(width(start_l, end_l), width(start_r, end_r));
+        // SAFETY:
+        // Since we had at least one Iteration of the loop:
+        //     `start_l` and `end_l` must point into `offsets_l` and be correctly aligned.
+        //     `start_r` and `end_r` must point into `offsets_r` and be correctly aligned.
+        let count = unsafe { cmp::min(width(start_l, end_l), width(start_r, end_r)) };
 
         if count > 0 {
             macro_rules! left {
@@ -478,8 +567,9 @@ where
                 start_r = start_r.add(1);
             }
         }
-
-        if start_l == end_l {
+        // SAFETY:
+        // `start_l` and `end_l` are always either null pointers or point into `offsets_r` correctly aligned.
+        if unsafe { eq(start_l, end_l) } {
             // All out-of-order elements in the left block were moved. Move to the next block.
 
             // block-width-guarantee
@@ -490,8 +580,9 @@ where
             // for the smaller number of remaining elements.
             l = unsafe { l.add(block_l) };
         }
-
-        if start_r == end_r {
+        // SAFETY:
+        // `start_r` and `end_r` are always either null pointers or point into `offsets_r` correctly aligned.
+        if unsafe { eq(start_r, end_r) } {
             // All out-of-order elements in the right block were moved. Move to the previous block.
 
             // SAFETY: Same argument as [block-width-guarantee]. Either this is a full block `2*BLOCK`-wide,
@@ -508,11 +599,21 @@ where
     // elements that need to be moved. Such remaining elements can be simply shifted to the end
     // within their block.
 
-    if start_l < end_l {
+    // SAFETY:
+    // `start_l` and `end_l` are always either null pointers or point into `offsets_l` correctly aligned.
+    if unsafe { lt(start_l, end_l) } {
         // The left block remains.
         // Move its remaining out-of-order elements to the far right.
-        debug_assert_eq!(width(l, r), block_l);
-        while start_l < end_l {
+
+        // SAFETY:
+        // since we just broke out of the loop, the difference between them must be in 0..BLOCK.
+        // `l` and `r` are only ever changed with add/sub, so they will always stay aligned (compared to each other).
+        // The length of the slice in bytes can never be bigger than isize::max, so `offset_from` won't ever overflow (or wrap around the address space).
+        debug_assert!(unsafe { width(l, r) == block_l });
+
+        // SAFETY:
+        // `start_l` and `end_l` are always either null pointers or point into `offsets_l` correctly aligned.
+        while unsafe { lt(start_l, end_l) } {
             // remaining-elements-safety
             // SAFETY: while the loop condition holds there are still elements in `offsets_l`, so it
             // is safe to point `end_l` to the previous element.
@@ -530,12 +631,27 @@ where
                 r = r.sub(1);
             }
         }
-        width(v.as_mut_ptr(), r)
-    } else if start_r < end_r {
+        // SAFETY:
+        // `r` starts of one byte past the end of v,
+        //    will only ever get modified by sub
+        //    and must always be at least as big as `l` which must always be bigger than v.
+        // The length of the slice in bytes can never be bigger than isize::max, so `offset_from` won't ever overflow (or wrap around the address space).
+        unsafe { width(v.as_mut_ptr(), r) }
+
+        // SAFETY:
+        // `start_r` and `end_r` are always either null pointers or point into `offsets_r´ correctly aligned.
+    } else if unsafe { lt(start_r, end_r) } {
         // The right block remains.
         // Move its remaining out-of-order elements to the far left.
-        debug_assert_eq!(width(l, r), block_r);
-        while start_r < end_r {
+        // SAFETY:
+        // since we just broke out of the loop, the difference between them must be in 0..BLOCK.
+        // `l` and `r` are only ever changed with add/sub, so they will always stay aligned (compared to each other).
+        // The length of the slice in bytes can never be bigger than isize::max, so `offset_from` won't ever overflow (or wrap around the address space).
+        debug_assert!(unsafe { width(l, r) } == block_r);
+
+        // SAFETY:
+        // `start_r` and `end_r` are always either null pointers or point into `offsets_r` correctly aligned.
+        while unsafe { lt(start_r, end_r) } {
             // SAFETY: See the reasoning in [remaining-elements-safety].
             unsafe {
                 end_r = end_r.sub(1);
@@ -543,10 +659,17 @@ where
                 l = l.add(1);
             }
         }
-        width(v.as_mut_ptr(), l)
+        // SAFETY:
+        // `l` starts of at v and is only ever modified with add it will always stay alighted with respect to each other.
+        // `l` will never be bigger than `r` which will never be bigger than one byte off the end of v.
+        // The length of the slice in bytes can never be bigger than isize::max, so `offset_from` won't ever overflow (or wrap around the address space).
+        unsafe { width(v.as_mut_ptr(), l) }
     } else {
         // Nothing else to do, we're done.
-        width(v.as_mut_ptr(), l)
+        // SAFETY:
+        // `l` starts of at v and is only ever modified with add it will always stay alighted with respect to each other.
+        // The length of the slice in bytes can never be bigger than isize::max, so `offset_from` won't ever overflow (or wrap around the address space).
+        unsafe { width(v.as_mut_ptr(), l) }
     }
 }
 
@@ -557,9 +680,9 @@ where
 ///
 /// 1. Number of elements smaller than `v[pivot]`.
 /// 2. True if `v` was already partitioned.
-fn partition<T, F>(v: &mut [T], pivot: usize, is_less: &mut F) -> (usize, bool)
+const fn partition<T, F>(v: &mut [T], pivot: usize, is_less: &mut F) -> (usize, bool)
 where
-    F: FnMut(&T, &T) -> bool,
+    F: ~const FnMut(&T, &T) -> bool,
 {
     let (mid, was_partitioned) = {
         // Place the pivot at the beginning of slice.
@@ -612,9 +735,9 @@ where
 ///
 /// Returns the number of elements equal to the pivot. It is assumed that `v` does not contain
 /// elements smaller than the pivot.
-fn partition_equal<T, F>(v: &mut [T], pivot: usize, is_less: &mut F) -> usize
+const fn partition_equal<T, F>(v: &mut [T], pivot: usize, is_less: &mut F) -> usize
 where
-    F: FnMut(&T, &T) -> bool,
+    F: ~const FnMut(&T, &T) -> bool,
 {
     // Place the pivot at the beginning of slice.
     v.swap(0, pivot);
@@ -670,11 +793,12 @@ where
 /// Scatters some elements around in an attempt to break patterns that might cause imbalanced
 /// partitions in quicksort.
 #[cold]
-fn break_patterns<T>(v: &mut [T]) {
+#[rustc_allow_const_fn_unstable(const_for)]
+const fn break_patterns<T>(v: &mut [T]) {
     let len = v.len();
     if len >= 8 {
         let mut seed = len;
-        let mut gen_usize = || {
+        let mut gen_usize = const || {
             // Pseudorandom number generator from the "Xorshift RNGs" paper by George Marsaglia.
             if usize::BITS <= 32 {
                 let mut r = seed as u32;
@@ -719,9 +843,9 @@ fn break_patterns<T>(v: &mut [T]) {
 /// Chooses a pivot in `v` and returns the index and `true` if the slice is likely already sorted.
 ///
 /// Elements in `v` might be reordered in the process.
-fn choose_pivot<T, F>(v: &mut [T], is_less: &mut F) -> (usize, bool)
+const fn choose_pivot<T, F>(v: &mut [T], is_less: &mut F) -> (usize, bool)
 where
-    F: FnMut(&T, &T) -> bool,
+    F: ~const FnMut(&T, &T) -> bool,
 {
     // Minimum length to choose the median-of-medians method.
     // Shorter slices use the simple median-of-three method.
@@ -747,7 +871,7 @@ where
         // pointer, which in turn means the calls to `sort2` are done with valid
         // references. Thus the `v.get_unchecked` calls are safe, as is the `ptr::swap`
         // call.
-        let mut sort2 = |a: &mut usize, b: &mut usize| unsafe {
+        let mut sort2 = const |a: &mut usize, b: &mut usize| unsafe {
             if is_less(v.get_unchecked(*b), v.get_unchecked(*a)) {
                 ptr::swap(a, b);
                 swaps += 1;
@@ -755,7 +879,7 @@ where
         };
 
         // Swaps indices so that `v[a] <= v[b] <= v[c]`.
-        let mut sort3 = |a: &mut usize, b: &mut usize, c: &mut usize| {
+        let mut sort3 = const |a: &mut usize, b: &mut usize, c: &mut usize| {
             sort2(a, b);
             sort2(b, c);
             sort2(a, b);
@@ -763,7 +887,7 @@ where
 
         if len >= SHORTEST_MEDIAN_OF_MEDIANS {
             // Finds the median of `v[a - 1], v[a], v[a + 1]` and stores the index into `a`.
-            let mut sort_adjacent = |a: &mut usize| {
+            let mut sort_adjacent = const |a: &mut usize| {
                 let tmp = *a;
                 sort3(&mut (tmp - 1), a, &mut (tmp + 1));
             };
@@ -794,9 +918,13 @@ where
 ///
 /// `limit` is the number of allowed imbalanced partitions before switching to `heapsort`. If zero,
 /// this function will immediately switch to heapsort.
-fn recurse<'a, T, F>(mut v: &'a mut [T], is_less: &mut F, mut pred: Option<&'a T>, mut limit: u32)
-where
-    F: FnMut(&T, &T) -> bool,
+const fn recurse<'a, T, F>(
+    mut v: &'a mut [T],
+    is_less: &mut F,
+    mut pred: Option<&'a T>,
+    mut limit: u32,
+) where
+    F: ~const FnMut(&T, &T) -> bool,
 {
     // Slices of up to this length get sorted using insertion sort.
     const MAX_INSERTION: usize = 20;
@@ -882,9 +1010,9 @@ where
 }
 
 /// Sorts `v` using pattern-defeating quicksort, which is *O*(*n* \* log(*n*)) worst-case.
-pub fn quicksort<T, F>(v: &mut [T], mut is_less: F)
+pub(crate) const fn quicksort<T, F>(v: &mut [T], mut is_less: F)
 where
-    F: FnMut(&T, &T) -> bool,
+    F: ~const FnMut(&T, &T) -> bool + ~const Destruct,
 {
     // Sorting has no meaningful behavior on zero-sized types.
     if T::IS_ZST {
@@ -897,13 +1025,13 @@ where
     recurse(v, &mut is_less, None, limit);
 }
 
-fn partition_at_index_loop<'a, T, F>(
+const fn partition_at_index_loop<'a, T, F>(
     mut v: &'a mut [T],
     mut index: usize,
     is_less: &mut F,
     mut pred: Option<&'a T>,
 ) where
-    F: FnMut(&T, &T) -> bool,
+    F: ~const FnMut(&T, &T) -> bool,
 {
     // Limit the amount of iterations and fall back to heapsort, similarly to `slice::sort_unstable`.
     // This lowers the worst case running time from O(n^2) to O(n log n).
@@ -984,19 +1112,24 @@ fn partition_at_index_loop<'a, T, F>(
 }
 
 /// Reorder the slice such that the element at `index` is at its final sorted position.
-pub fn partition_at_index<T, F>(
+#[rustc_const_unstable(feature = "const_sort", issue = "102307")]
+pub const fn partition_at_index<T, F>(
     v: &mut [T],
     index: usize,
     mut is_less: F,
 ) -> (&mut [T], &mut T, &mut [T])
 where
-    F: FnMut(&T, &T) -> bool,
+    F: ~const FnMut(&T, &T) -> bool + ~const Destruct,
 {
-    use cmp::Ordering::Greater;
-    use cmp::Ordering::Less;
-
     if index >= v.len() {
-        panic!("partition_at_index index {} greater than length of slice {}", index, v.len());
+        const fn const_panic(_index: usize, _len: usize) {
+            panic!("partition_at_index index ? greater than length of slice ?")
+        }
+        fn rt_panic(index: usize, len: usize) {
+            panic!("partition_at_index index {} greater than length of slice {}", index, len)
+        }
+        // SAFETY: only panicking
+        unsafe { const_eval_select((index, v.len()), const_panic, rt_panic) }
     }
 
     if T::IS_ZST {
@@ -1004,20 +1137,41 @@ where
     } else if index == v.len() - 1 {
         // Find max element and place it in the last position of the array. We're free to use
         // `unwrap()` here because we know v must not be empty.
-        let (max_index, _) = v
-            .iter()
-            .enumerate()
-            .max_by(|&(_, x), &(_, y)| if is_less(x, y) { Less } else { Greater })
-            .unwrap();
+
+        // FIXME(const_trait_impl): revert to: (and fix closure)
+        // let (max_index, _) = v
+        //     .iter()
+        //     .enumerate()
+        //     .max_by(|&(_, x), &(_, y)| if is_less(x, y) { Less } else { Greater })
+        //     .unwrap();
+        let mut max_index = 0;
+        let mut i = 0;
+        while i < v.len() {
+            if is_less(&v[max_index], &v[i]) {
+                max_index = i;
+            }
+            i += 1;
+        }
+
         v.swap(max_index, index);
     } else if index == 0 {
         // Find min element and place it in the first position of the array. We're free to use
         // `unwrap()` here because we know v must not be empty.
-        let (min_index, _) = v
-            .iter()
-            .enumerate()
-            .min_by(|&(_, x), &(_, y)| if is_less(x, y) { Less } else { Greater })
-            .unwrap();
+        // FIXME(const_trait_impl): revert to: (and fix closure)
+        //let (min_index, _) = v
+        //    .iter()
+        //    .enumerate()
+        //    .min_by(|&(_, x), &(_, y)| if is_less(x, y) { Less } else { Greater })
+        //    .unwrap();
+        let mut min_index = 0;
+        let mut i = 0;
+        while i < v.len() {
+            if is_less(&v[i], &v[min_index]) {
+                min_index = i;
+            }
+            i += 1;
+        }
+
         v.swap(min_index, index);
     } else {
         partition_at_index_loop(v, index, &mut is_less, None);

@@ -9,7 +9,7 @@
 use crate::cmp::Ordering::{self, Greater, Less};
 use crate::fmt;
 use crate::intrinsics::{assert_unsafe_precondition, exact_div};
-use crate::marker::Copy;
+use crate::marker::{Copy, Destruct};
 use crate::mem::{self, SizedTypeProperties};
 use crate::num::NonZeroUsize;
 use crate::ops::{Bound, FnMut, OneSidedRange, Range, RangeBounds};
@@ -2629,10 +2629,11 @@ impl<T> [T] {
     ///
     /// [pdqsort]: https://github.com/orlp/pdqsort
     #[stable(feature = "sort_unstable", since = "1.20.0")]
+    #[rustc_const_unstable(feature = "const_sort", issue = "102307")]
     #[inline]
-    pub fn sort_unstable(&mut self)
+    pub const fn sort_unstable(&mut self)
     where
-        T: Ord,
+        T: ~const Ord,
     {
         sort::quicksort(self, T::lt);
     }
@@ -2684,12 +2685,13 @@ impl<T> [T] {
     ///
     /// [pdqsort]: https://github.com/orlp/pdqsort
     #[stable(feature = "sort_unstable", since = "1.20.0")]
+    #[rustc_const_unstable(feature = "const_sort", issue = "102307")]
     #[inline]
-    pub fn sort_unstable_by<F>(&mut self, mut compare: F)
+    pub const fn sort_unstable_by<F>(&mut self, mut compare: F)
     where
-        F: FnMut(&T, &T) -> Ordering,
+        F: ~const FnMut(&T, &T) -> Ordering + ~const Destruct,
     {
-        sort::quicksort(self, |a, b| compare(a, b) == Ordering::Less);
+        sort::quicksort(self, const |a, b| compare(a, b) == Ordering::Less);
     }
 
     /// Sorts the slice with a key extraction function, but might not preserve the order of equal
@@ -2722,13 +2724,14 @@ impl<T> [T] {
     ///
     /// [pdqsort]: https://github.com/orlp/pdqsort
     #[stable(feature = "sort_unstable", since = "1.20.0")]
+    #[rustc_const_unstable(feature = "const_sort", issue = "102307")]
     #[inline]
-    pub fn sort_unstable_by_key<K, F>(&mut self, mut f: F)
+    pub const fn sort_unstable_by_key<K, F>(&mut self, mut f: F)
     where
-        F: FnMut(&T) -> K,
-        K: Ord,
+        F: ~const FnMut(&T) -> K + ~const Destruct,
+        K: ~const Ord + ~const Destruct,
     {
-        sort::quicksort(self, |a, b| f(a).lt(&f(b)));
+        sort::quicksort(self, const |a, b| f(a).lt(&f(b)));
     }
 
     /// Reorder the slice such that the element at `index` is at its final sorted position.
@@ -2771,10 +2774,11 @@ impl<T> [T] {
     ///         v == [-5, -3, 1, 4, 2]);
     /// ```
     #[stable(feature = "slice_select_nth_unstable", since = "1.49.0")]
+    #[rustc_const_unstable(feature = "const_sort", issue = "102307")]
     #[inline]
-    pub fn select_nth_unstable(&mut self, index: usize) -> (&mut [T], &mut T, &mut [T])
+    pub const fn select_nth_unstable(&mut self, index: usize) -> (&mut [T], &mut T, &mut [T])
     where
-        T: Ord,
+        T: ~const Ord,
     {
         sort::partition_at_index(self, index, T::lt)
     }
@@ -2822,16 +2826,17 @@ impl<T> [T] {
     ///         v == [4, 2, 1, -3, -5]);
     /// ```
     #[stable(feature = "slice_select_nth_unstable", since = "1.49.0")]
+    #[rustc_const_unstable(feature = "const_sort", issue = "102307")]
     #[inline]
-    pub fn select_nth_unstable_by<F>(
+    pub const fn select_nth_unstable_by<F>(
         &mut self,
         index: usize,
         mut compare: F,
     ) -> (&mut [T], &mut T, &mut [T])
     where
-        F: FnMut(&T, &T) -> Ordering,
+        F: ~const FnMut(&T, &T) -> Ordering + ~const Destruct,
     {
-        sort::partition_at_index(self, index, |a: &T, b: &T| compare(a, b) == Less)
+        sort::partition_at_index(self, index, const |a: &T, b: &T| compare(a, b) == Less)
     }
 
     /// Reorder the slice with a key extraction function such that the element at `index` is at its
@@ -2877,17 +2882,18 @@ impl<T> [T] {
     ///         v == [2, 1, -3, -5, 4]);
     /// ```
     #[stable(feature = "slice_select_nth_unstable", since = "1.49.0")]
+    #[rustc_const_unstable(feature = "const_sort", issue = "102307")]
     #[inline]
-    pub fn select_nth_unstable_by_key<K, F>(
+    pub const fn select_nth_unstable_by_key<K, F>(
         &mut self,
         index: usize,
         mut f: F,
     ) -> (&mut [T], &mut T, &mut [T])
     where
-        F: FnMut(&T) -> K,
-        K: Ord,
+        F: ~const FnMut(&T) -> K + ~const Destruct,
+        K: ~const Ord + ~const Destruct,
     {
-        sort::partition_at_index(self, index, |a: &T, b: &T| f(a).lt(&f(b)))
+        sort::partition_at_index(self, index, const |a: &T, b: &T| f(a).lt(&f(b)))
     }
 
     /// Moves all consecutive repeated elements to the end of the slice according to the
@@ -3801,12 +3807,16 @@ impl<T> [T] {
     /// ```
     #[inline]
     #[unstable(feature = "is_sorted", reason = "new API", issue = "53485")]
+    #[rustc_const_unstable(feature = "const_sort", issue = "102307")]
     #[must_use]
-    pub fn is_sorted(&self) -> bool
+    pub const fn is_sorted(&self) -> bool
     where
-        T: PartialOrd,
+        T: ~const PartialOrd,
     {
-        self.is_sorted_by(|a, b| a.partial_cmp(b))
+        const fn const_pred_p_cmp<T: ~const PartialOrd>(a: &T, b: &T) -> Option<Ordering> {
+            a.partial_cmp(b)
+        }
+        self.is_sorted_by(const_pred_p_cmp)
     }
 
     /// Checks if the elements of this slice are sorted using the given comparator function.
@@ -3817,12 +3827,26 @@ impl<T> [T] {
     ///
     /// [`is_sorted`]: slice::is_sorted
     #[unstable(feature = "is_sorted", reason = "new API", issue = "53485")]
+    #[rustc_const_unstable(feature = "const_sort", issue = "102307")]
     #[must_use]
-    pub fn is_sorted_by<'a, F>(&'a self, mut compare: F) -> bool
+    pub const fn is_sorted_by<'a, F>(&'a self, mut compare: F) -> bool
     where
-        F: FnMut(&'a T, &'a T) -> Option<Ordering>,
+        F: ~const FnMut(&'a T, &'a T) -> Option<Ordering> + ~const Destruct,
     {
-        self.iter().is_sorted_by(|a, b| compare(*a, *b))
+        // FIXME(const_trait_impl): revert to (after fixing closure): self.iter().is_sorted_by(|a, b| compare(*a, *b))
+
+        let mut i = 1;
+        while i < self.len() {
+            let ord_opt = compare(&self[i - 1], &self[i]);
+            if ord_opt.is_none() {
+                return false;
+            }
+            if ord_opt.unwrap() == Ordering::Greater {
+                return false;
+            }
+            i += 1;
+        }
+        true
     }
 
     /// Checks if the elements of this slice are sorted using the given key extraction function.
@@ -3843,13 +3867,14 @@ impl<T> [T] {
     /// ```
     #[inline]
     #[unstable(feature = "is_sorted", reason = "new API", issue = "53485")]
+    #[rustc_const_unstable(feature = "const_sort", issue = "102307")]
     #[must_use]
-    pub fn is_sorted_by_key<'a, F, K>(&'a self, f: F) -> bool
+    pub const fn is_sorted_by_key<'a, F, K>(&'a self, mut f: F) -> bool
     where
-        F: FnMut(&'a T) -> K,
-        K: PartialOrd,
+        F: ~const FnMut(&'a T) -> K + ~const Destruct,
+        K: ~const PartialOrd + ~const Destruct,
     {
-        self.iter().is_sorted_by_key(f)
+        self.is_sorted_by(const |a, b| f(a).partial_cmp(&f(b)))
     }
 
     /// Returns the index of the partition point according to the given predicate
