@@ -18,6 +18,23 @@ extern "C" {
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
+#[rustc_const_unstable(feature = "const_cmp", issue = "92391")]
+#[cfg(not(bootstrap))]
+impl<A, B> const PartialEq<[B]> for [A]
+where
+    A: ~const PartialEq<B>,
+{
+    fn eq(&self, other: &[B]) -> bool {
+        SlicePartialEq::equal(self, other)
+    }
+
+    fn ne(&self, other: &[B]) -> bool {
+        SlicePartialEq::not_equal(self, other)
+    }
+}
+
+#[stable(feature = "rust1", since = "1.0.0")]
+#[cfg(bootstrap)]
 impl<A, B> PartialEq<[B]> for [A]
 where
     A: PartialEq<B>,
@@ -32,6 +49,12 @@ where
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
+#[rustc_const_unstable(feature = "const_cmp", issue = "92391")]
+#[cfg(not(bootstrap))]
+impl<T: ~const Eq> const Eq for [T] {}
+
+#[stable(feature = "rust1", since = "1.0.0")]
+#[cfg(bootstrap)]
 impl<T: Eq> Eq for [T] {}
 
 /// Implements comparison of vectors [lexicographically](Ord#lexicographical-comparison).
@@ -51,6 +74,7 @@ impl<T: PartialOrd> PartialOrd for [T] {
 }
 
 #[doc(hidden)]
+#[const_trait]
 // intermediate trait for specialization of slice's PartialEq
 trait SlicePartialEq<B> {
     fn equal(&self, other: &[B]) -> bool;
@@ -61,6 +85,21 @@ trait SlicePartialEq<B> {
 }
 
 // Generic slice equality
+#[cfg(not(bootstrap))]
+impl<A, B> const SlicePartialEq<B> for [A]
+where
+    A: ~const PartialEq<B>,
+{
+    #[rustc_do_not_const_check]
+    default fn equal(&self, other: &[B]) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        self.iter().zip(other.iter()).all(const |(x, y)| x == y)
+    }
+}
+// Generic slice equality
+#[cfg(bootstrap)]
 impl<A, B> SlicePartialEq<B> for [A]
 where
     A: PartialEq<B>,
@@ -70,11 +109,31 @@ where
             return false;
         }
 
-        self.iter().zip(other.iter()).all(|(x, y)| x == y)
+        self.iter().zip(other.iter()).all(const |(x, y)| x == y)
     }
 }
 
 // Use memcmp for bytewise equality when the types allow
+#[cfg(not(bootstrap))]
+impl<A, B> const SlicePartialEq<B> for [A]
+where
+    A: ~const BytewiseEquality<B>,
+{
+    fn equal(&self, other: &[B]) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+
+        // SAFETY: `self` and `other` are references and are thus guaranteed to be valid.
+        // The two slices have been checked to have the same size above.
+        unsafe {
+            let size = mem::size_of_val(self);
+            memcmp(self.as_ptr() as *const u8, other.as_ptr() as *const u8, size) == 0
+        }
+    }
+}
+// Use memcmp for bytewise equality when the types allow
+#[cfg(bootstrap)]
 impl<A, B> SlicePartialEq<B> for [A]
 where
     A: BytewiseEquality<B>,
@@ -205,25 +264,27 @@ impl SliceOrd for u8 {
 
 // Hack to allow specializing on `Eq` even though `Eq` has a method.
 #[rustc_unsafe_specialization_marker]
-trait MarkerEq<T>: PartialEq<T> {}
+#[const_trait]
+trait MarkerEq<T>: ~const PartialEq<T> {}
 
-impl<T: Eq> MarkerEq<T> for T {}
+impl<T: ~const Eq> const MarkerEq<T> for T {}
 
 #[doc(hidden)]
 /// Trait implemented for types that can be compared for equality using
 /// their bytewise representation
 #[rustc_specialization_trait]
-trait BytewiseEquality<T>: MarkerEq<T> + Copy {}
+#[const_trait]
+trait BytewiseEquality<T>: ~const MarkerEq<T> + Copy {}
 
 macro_rules! impl_marker_for {
-    ($traitname:ident, $($ty:ty)*) => {
+    (const $traitname:ident, $($ty:ty)*) => {
         $(
-            impl $traitname<$ty> for $ty { }
+            impl const $traitname<$ty> for $ty { }
         )*
     }
 }
 
-impl_marker_for!(BytewiseEquality,
+impl_marker_for!(const BytewiseEquality,
                  u8 i8 u16 i16 u32 i32 u64 i64 u128 i128 usize isize char bool);
 
 pub(super) trait SliceContains: Sized {
